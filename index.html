@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101827">
+  <title>دردشة تجريبية | chat-app</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b1220; --panel:#121d2e; --line:#26354b; --text:#edf3fb; --muted:#9fb0c5; --accent:#39c6a4; --mine:#174c46; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; background:radial-gradient(circle at top,#18283b 0,#0b1220 55%); color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",Tahoma,Arial,sans-serif; display:flex; justify-content:center; padding:18px; }
+    .app { width:min(760px,100%); min-height:calc(100vh - 36px); display:flex; flex-direction:column; background:rgba(18,29,46,.96); border:1px solid var(--line); border-radius:20px; overflow:hidden; box-shadow:0 20px 70px #0005; }
+    header { padding:20px; border-bottom:1px solid var(--line); display:flex; gap:14px; align-items:center; }
+    .logo { width:48px;height:48px;display:grid;place-items:center;border-radius:15px;background:#173d3a;color:var(--accent);font-size:25px; }
+    h1 { margin:0;font-size:20px; } .sub { color:var(--muted);font-size:13px;margin-top:4px; }
+    .status { margin-right:auto; font-size:12px; color:var(--muted); display:flex;align-items:center;gap:7px; }
+    .dot { width:8px;height:8px;border-radius:50%;background:#d6a94d; } .dot.ok { background:var(--accent); }
+    .notice { margin:14px 16px 0; padding:10px 12px; border-radius:10px; background:#17283a; color:var(--muted); font-size:12px; line-height:1.7; }
+    .identity { display:flex; gap:8px; padding:14px 16px 0; }
+    input,button { font:inherit; }
+    input { min-width:0; color:var(--text); background:#0c1625; border:1px solid var(--line); border-radius:11px; padding:11px 12px; outline:none; }
+    input:focus { border-color:var(--accent); }
+    #name { flex:1; }
+    #messages { list-style:none; padding:16px; margin:0; flex:1; display:flex; flex-direction:column; gap:10px; min-height:260px; max-height:58vh; overflow:auto; }
+    .empty { margin:auto; color:var(--muted); text-align:center; padding:25px 10px; line-height:1.8; }
+    .msg { max-width:88%; align-self:flex-start; background:#1b2a3d; border:1px solid #2b3b50; border-radius:14px 14px 14px 4px; padding:10px 12px; overflow-wrap:anywhere; }
+    .msg.mine { align-self:flex-end; background:var(--mine); border-color:#23675d; border-radius:14px 14px 4px 14px; }
+    .meta { display:flex; gap:10px; color:#b9c8d9; font-size:11px; margin-bottom:5px; }
+    .body { white-space:pre-wrap; line-height:1.55; }
+    form { display:flex; gap:9px; padding:14px 16px 16px; border-top:1px solid var(--line); }
+    #text { flex:1; }
+    button { border:0; border-radius:11px; padding:10px 17px; font-weight:700; cursor:pointer; background:var(--accent); color:#06221d; }
+    button:disabled { opacity:.5;cursor:not-allowed; }
+    #feedback { min-height:22px; padding:0 17px 10px; color:var(--muted);font-size:12px; }
+    @media (max-width:480px) { body{padding:0}.app{min-height:100vh;border-radius:0;border:0}.status{font-size:11px}header{padding:16px}.msg{max-width:94%} }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <div class="logo" aria-hidden="true">✉</div>
+      <div>
+        <h1>دردشة تجريبية</h1>
+        <div class="sub">chat-app · الغرفة العامة</div>
+      </div>
+      <div class="status"><span id="dot" class="dot"></span><span id="connection">جارٍ الاتصال...</span></div>
+    </header>
+    <div class="notice">هذه نسخة اختبار أولية. الدخول مجهول بلا بريد أو كلمة مرور. لا تستخدمها للمعلومات الخاصة؛ أسماء العرض يختارها المستخدم وليست هوية موثّقة.</div>
+    <div class="identity">
+      <input id="name" maxlength="40" placeholder="اسمك في الدردشة" aria-label="اسم العرض">
+    </div>
+    <ol id="messages" aria-live="polite">
+      <li class="empty" id="empty">لحظة واحدة، نحاول الاتصال بقاعدة البيانات…</li>
+    </ol>
+    <div id="feedback" role="status"></div>
+    <form id="form">
+      <input id="text" maxlength="2000" autocomplete="off" placeholder="اكتب رسالتك هنا..." aria-label="نص الرسالة" required>
+      <button id="send" type="submit" disabled>إرسال</button>
+    </form>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    // معلومات الربط العامة الخاصة بمشروعك. لا تضع مفاتيح secret أو service_role في الواجهة.
+    const SUPABASE_URL = 'https://nlnqpqphelqrlrthnmxu.supabase.co';
+    const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_7JB5MGXgXd2FmuSGRAZK8w_jBxNzVZg';
+    const ROOM_ID = 'lobby';
+
+    const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+    const messagesEl = document.getElementById('messages');
+    const emptyEl = document.getElementById('empty');
+    const form = document.getElementById('form');
+    const textEl = document.getElementById('text');
+    const nameEl = document.getElementById('name');
+    const sendBtn = document.getElementById('send');
+    const feedback = document.getElementById('feedback');
+    const connection = document.getElementById('connection');
+    const dot = document.getElementById('dot');
+    let currentUser = null;
+    const seenIds = new Set();
+
+    nameEl.value = localStorage.getItem('chat_display_name') || '';
+
+    function setStatus(message, ok=false) {
+      connection.textContent = message;
+      dot.classList.toggle('ok', ok);
+    }
+    function setFeedback(message) { feedback.textContent = message || ''; }
+    function escapeText(value) { return String(value ?? ''); }
+    function showEmpty(message) {
+      const existing = messagesEl.querySelector('.empty');
+      if (existing) {
+        existing.textContent = message;
+        return;
+      }
+      if (messagesEl.children.length === 0) {
+        const li = document.createElement('li');
+        li.className = 'empty';
+        li.textContent = message;
+        messagesEl.appendChild(li);
+      }
+    }
+    function renderMessage(row) {
+      if (!row || seenIds.has(row.id)) return;
+      seenIds.add(row.id);
+      if (emptyEl && emptyEl.isConnected) emptyEl.remove();
+      const li = document.createElement('li');
+      li.className = 'msg' + (currentUser && row.sender_id === currentUser.id ? ' mine' : '');
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const sender = document.createElement('span');
+      sender.textContent = escapeText(row.sender_name);
+      const time = document.createElement('time');
+      const date = new Date(row.created_at);
+      time.dateTime = date.toISOString();
+      time.textContent = date.toLocaleTimeString('ar', {hour:'2-digit', minute:'2-digit'});
+      meta.append(sender, time);
+      const body = document.createElement('div');
+      body.className = 'body';
+      body.textContent = escapeText(row.content); // textContent يمنع تفسير الرسائل كـ HTML
+      li.append(meta, body);
+      messagesEl.appendChild(li);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+    async function start() {
+      try {
+        setStatus('تسجيل دخول آمن...');
+        let { data: { session }, error: sessionError } = await client.auth.getSession();
+        if (sessionError) throw sessionError;
+        if (!session) {
+          const result = await client.auth.signInAnonymously();
+          if (result.error) throw result.error;
+          session = result.data.session;
+        }
+        currentUser = session.user;
+        setStatus('تحميل الرسائل...');
+        const { data, error } = await client
+          .from('messages')
+          .select('id, room_id, sender_id, sender_name, content, created_at')
+          .eq('room_id', ROOM_ID)
+          .order('created_at', { ascending: true })
+          .limit(100);
+        if (error) throw error;
+        if (data.length === 0) showEmpty('لا توجد رسائل بعد. كن أول من يرسل رسالة! 👋');
+        else if (emptyEl && emptyEl.isConnected) emptyEl.remove();
+        data.forEach(renderMessage);
+        setStatus('متصل', true);
+        sendBtn.disabled = false;
+
+        client.channel('chat-lobby-messages')
+          .on('postgres_changes', {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'messages',
+            filter: 'room_id=eq.' + ROOM_ID
+          }, payload => renderMessage(payload.new))
+          .subscribe((status, err) => {
+            if (status === 'SUBSCRIBED') setStatus('متصل · مباشر', true);
+            else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+              setStatus('تعذّر الاتصال المباشر');
+              if (err) console.error('Realtime:', err);
+            }
+          });
+      } catch (error) {
+        console.error(error);
+        setStatus('تعذّر الاتصال');
+        setFeedback('لم يكتمل الاتصال. تأكد من إعدادات المشروع والإنترنت، ثم افتح أدوات المطوّر لمعرفة الخطأ.');
+        showEmpty('تعذّر تحميل الرسائل. راجع إعدادات المصادقة والصلاحيات ثم أعد فتح الصفحة.');
+      }
+    }
+
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!currentUser) return;
+      const content = textEl.value.trim();
+      const senderName = nameEl.value.trim();
+      if (!senderName) { setFeedback('اكتب اسمًا يظهر للآخرين أولًا.'); nameEl.focus(); return; }
+      if (!content) return;
+      sendBtn.disabled = true;
+      setFeedback('');
+      localStorage.setItem('chat_display_name', senderName);
+      const { error } = await client.from('messages').insert({
+        room_id: ROOM_ID,
+        sender_id: currentUser.id,
+        sender_name: senderName,
+        content
+      });
+      sendBtn.disabled = false;
+      if (error) {
+        console.error(error);
+        setFeedback('لم تُرسل الرسالة. تحقق من الاتصال والصلاحيات ثم حاول مجددًا.');
+        return;
+      }
+      textEl.value = '';
+      textEl.focus();
+    });
+
+    start();
+  </script>
+</body>
+</html>
